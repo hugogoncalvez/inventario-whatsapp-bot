@@ -1,0 +1,16 @@
+2026/03/13-12:44:36.361 8dfb Reusing MANIFEST /home/hugo/01-Proyectos/BotWhatsapp/nodeW/.wwebjs_auth/session/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/03/13-12:44:36.362 8dfb Recovering log #563
+2026/03/13-12:44:36.420 8dfb Reusing old log /home/hugo/01-Proyectos/BotWhatsapp/nodeW/.wwebjs_auth/session/Default/IndexedDB/https_web.whatsapp.com_0.indexeddb.leveldb/000563.log 
+2026/03/13-12:44:42.842 8df3 Level-0 table #570: started
+2026/03/13-12:44:42.870 8df3 Level-0 table #570: 1160851 bytes OK
+2026/03/13-12:44:42.874 8df3 Delete type=0 #563
+2026/03/13-12:44:43.554 8df0 Compacting 1@1 + 3@2 files
+2026/03/13-12:44:43.603 8df0 Generated table #571@1: 51470 keys, 2214657 bytes
+2026/03/13-12:44:43.632 8df0 Generated table #572@1: 21641 keys, 2183353 bytes
+2026/03/13-12:44:43.672 8df0 Generated table #573@1: 33152 keys, 1371679 bytes
+2026/03/13-12:44:43.672 8df0 Compacted 1@1 + 3@2 files => 5769689 bytes
+2026/03/13-12:44:43.675 8df0 compacted to: files[ 0 0 3 0 0 0 0 ]
+2026/03/13-12:44:43.676 8df0 Delete type=2 #565
+2026/03/13-12:44:43.676 8df0 Delete type=2 #570
+2026/03/13-12:44:43.676 8df0 Delete type=2 #566
+2026/03/13-12:44:43.676 8df0 Delete type=2 #567

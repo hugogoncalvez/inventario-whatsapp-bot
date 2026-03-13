@@ -1,0 +1,6 @@
+2026/03/13-12:29:04.622 828b Reusing MANIFEST /home/hugo/01-Proyectos/BotWhatsapp/nodeW/.wwebjs_auth/session/Default/Local Storage/leveldb/MANIFEST-000001
+2026/03/13-12:29:04.623 828b Recovering log #75
+2026/03/13-12:29:04.623 828b Reusing old log /home/hugo/01-Proyectos/BotWhatsapp/nodeW/.wwebjs_auth/session/Default/Local Storage/leveldb/000075.log 
+2026/03/13-12:33:05.026 828e Level-0 table #79: started
+2026/03/13-12:33:05.034 828e Level-0 table #79: 16024 bytes OK
+2026/03/13-12:33:05.038 828e Delete type=0 #75
