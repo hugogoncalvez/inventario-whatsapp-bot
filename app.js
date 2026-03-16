@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const qrcode = require('qrcode-terminal');
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const { saveSession, restoreSession } = require('./sessionStore');
 
@@ -15,21 +15,21 @@ let sock;
 let isReady = false;
 
 async function connectToWhatsApp() {
-    // 1. Intentar restaurar sesión de Supabase
-    await restoreSession();
-
-    // 2. Configurar autenticación multi-archivo
+    // 1. Configurar autenticación multi-archivo (ya restaurada previamente)
     const { state, saveCreds } = await useMultiFileAuthState('auth');
+    const { version } = await fetchLatestBaileysVersion();
 
-    // 3. Inicializar socket
+    // 2. Inicializar socket
     sock = makeWASocket({
+        version,
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' }), // Menos ruido en logs
-        browser: ['Alert Service', 'Chrome', '1.0.0']
+        logger: pino({ level: 'silent' }),
+        browser: ['Alert Service', 'Chrome', '1.0.0'],
+        keepAliveIntervalMs: 30000, // Mantener socket activo
     });
 
-    // Eventos de conexión
+    // 3. Eventos de conexión
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
@@ -40,16 +40,19 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             isReady = false;
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.warn('⚠️ Conexión cerrada. ¿Reconectando?:', shouldReconnect);
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.warn(`⚠️ Conexión cerrada (Status ${statusCode}). Reconectando en 5s...`);
+            
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(connectToWhatsApp, 5000); // Reconexión limpia sin re-descargar de Supabase
             }
         } else if (connection === 'open') {
             console.log('✅✅✅ WhatsApp Conectado y LISTO ✅✅✅');
             isReady = true;
             
-            // Guardar sesión en Supabase una vez conectado con éxito
+            // Guardar sesión en Supabase solo una vez al conectar con éxito
             try {
                 await saveSession();
             } catch (err) {
@@ -58,26 +61,23 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Guardar credenciales automáticamente cuando cambien
+    // Guardar credenciales automáticamente
     sock.ev.on('creds.update', saveCreds);
-
-    // Escuchar mensajes (opcional, igual que antes para ver IDs)
-    sock.ev.on('messages.upsert', async m => {
-        const msg = m.messages[0];
-        if (!msg.key.fromMe && m.type === 'notify') {
-            const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
-            if (text === '!id') {
-                const remoteJid = msg.key.remoteJid;
-                console.log(`--- INFO DE CHAT ---`);
-                console.log(`ID: ${remoteJid}`);
-                console.log(`--------------------`);
-            }
-        }
-    });
 }
 
-// Iniciar conexión
-connectToWhatsApp();
+// --- FLUJO DE INICIO CRÍTICO ---
+(async () => {
+    console.log('🚀 Iniciando servicio...');
+    try {
+        // Restauramos sesión desde Supabase UNA SOLA VEZ al arrancar el contenedor
+        await restoreSession();
+    } catch (err) {
+        console.log('ℹ️ No hay sesión previa o error al restaurar');
+    }
+    
+    // Una vez restaurado (o no), iniciamos el socket
+    connectToWhatsApp();
+})();
 
 // --- RUTAS DE LA API ---
 
@@ -110,7 +110,6 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        // Formatear número para Baileys (ej: 5493764000000@s.whatsapp.net)
         const cleanNumber = number.replace(/\D/g, '');
         const jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@s.whatsapp.net`;
         
@@ -124,5 +123,5 @@ app.post('/send', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor de Alertas WhatsApp (Socket) corriendo en puerto ${PORT}`);
+    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
