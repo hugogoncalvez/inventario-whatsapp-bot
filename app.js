@@ -27,7 +27,11 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--single-process',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--js-flags="--max-old-space-size=256"'
         ]
     }
 });
@@ -49,6 +53,7 @@ client.on('authenticated', async () => {
     console.log('✅ Autenticación exitosa');
     // Guardar sesión tras autenticación (esperamos a que se generen los archivos)
     setTimeout(async () => {
+        if (isReady) return; // No guardar si ya estamos listos y estables
         try {
             await saveSession();
         } catch (err) {
