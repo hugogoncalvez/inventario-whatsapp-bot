@@ -37,6 +37,7 @@ const client = new Client({
 });
 
 let isReady = false;
+let sessionRestored = false;
 
 // Eventos de WhatsApp
 client.on('qr', (qr) => {
@@ -53,6 +54,7 @@ client.on('authenticated', async () => {
     console.log('✅ Autenticación exitosa');
     // Guardar sesión tras autenticación (esperamos a que se generen los archivos)
     setTimeout(async () => {
+        if (sessionRestored) return; // No guardar si ya la restauramos de la nube
         if (isReady) return; // No guardar si ya estamos listos y estables
         try {
             await saveSession();
@@ -91,7 +93,7 @@ client.on('message_create', async (msg) => {
 // Inicializar cliente (restaurando sesión de Supabase si existe)
 (async () => {
     try {
-        await restoreSession();
+        sessionRestored = await restoreSession();
     } catch (err) {
         console.log('ℹ️ No se pudo restaurar la sesión (primera vez)');
     }
