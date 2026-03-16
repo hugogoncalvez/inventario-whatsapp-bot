@@ -31,6 +31,16 @@ async function saveSession() {
                 if (error) throw error;
                 console.log('✅ Sesión guardada en Supabase');
                 await fs.remove(SESSION_FILE);
+        // Limpiar archivos de bloqueo de Chrome
+        const sessionPath = path.join(AUTH_PATH, 'session');
+        const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+        for (const lock of lockFiles) {
+            const lockPath = path.join(sessionPath, lock);
+            if (await fs.pathExists(lockPath)) {
+                await fs.remove(lockPath);
+                console.log(`🧹 Borrado archivo de bloqueo: ${lock}`);
+            }
+        }
                 resolve();
             } catch (err) {
                 reject(err);
@@ -73,6 +83,16 @@ async function restoreSession() {
             .promise();
 
         await fs.remove(SESSION_FILE);
+        // Limpiar archivos de bloqueo de Chrome
+        const sessionPath = path.join(AUTH_PATH, 'session');
+        const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+        for (const lock of lockFiles) {
+            const lockPath = path.join(sessionPath, lock);
+            if (await fs.pathExists(lockPath)) {
+                await fs.remove(lockPath);
+                console.log(`🧹 Borrado archivo de bloqueo: ${lock}`);
+            }
+        }
         console.log('✅ Sesión restaurada con éxito');
         return true;
     } catch (err) {
