@@ -4,29 +4,34 @@ const cors = require('cors');
 const qrcode = require('qrcode-terminal');
 const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const fs = require('fs-extra');
 const { saveSession, restoreSession } = require('./sessionStore');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Render usa el puerto 10000 por defecto. Asegurémonos de que sea ese.
 const PORT = process.env.PORT || 10000;
 let sock;
 let isReady = false;
 
 async function connectToWhatsApp() {
-    // 1. Configurar autenticación multi-archivo (ya restaurada previamente)
+    console.log('🔄 Conectando a WhatsApp...');
+    
+    // 1. Configurar autenticación (la carpeta 'auth' ya fue restaurada en el inicio)
     const { state, saveCreds } = await useMultiFileAuthState('auth');
     const { version } = await fetchLatestBaileysVersion();
 
-    // 2. Inicializar socket
+    // 2. Inicializar socket con opciones de estabilidad
     sock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ['Alert Service', 'Chrome', '1.0.0'],
-        keepAliveIntervalMs: 30000, // Mantener socket activo
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
     });
 
     // 3. Eventos de conexión
@@ -34,25 +39,28 @@ async function connectToWhatsApp() {
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
-            console.log('--- ESCANEA EL CÓDIGO QR PARA CONECTAR ---');
+            console.log('⚠️ SESIÓN NO ENCONTRADA O EXPIRADA. ESCANEA EL QR:');
             qrcode.generate(qr, { small: true });
         }
 
         if (connection === 'close') {
             isReady = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
-            console.warn(`⚠️ Conexión cerrada (Status ${statusCode}). Reconectando en 5s...`);
-            
-            if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 5000); // Reconexión limpia sin re-descargar de Supabase
+            // Si la sesión fue cerrada manualmente o invalidada (401), borramos la carpeta auth
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.error('❌ Sesión cerrada por WhatsApp (Logged Out). Borrando credenciales locales...');
+                await fs.remove('./auth');
+                setTimeout(connectToWhatsApp, 5000);
+            } else {
+                console.warn(`⚠️ Conexión perdida (Status ${statusCode}). Reintentando en 5s...`);
+                setTimeout(connectToWhatsApp, 5000);
             }
         } else if (connection === 'open') {
             console.log('✅✅✅ WhatsApp Conectado y LISTO ✅✅✅');
             isReady = true;
             
-            // Guardar sesión en Supabase solo una vez al conectar con éxito
+            // Guardar la sesión "buena" en Supabase
             try {
                 await saveSession();
             } catch (err) {
@@ -61,67 +69,53 @@ async function connectToWhatsApp() {
         }
     });
 
-    // Guardar credenciales automáticamente
     sock.ev.on('creds.update', saveCreds);
 }
 
-// --- FLUJO DE INICIO CRÍTICO ---
+// --- INICIO ---
 (async () => {
     console.log('🚀 Iniciando servicio...');
     try {
-        // Restauramos sesión desde Supabase UNA SOLA VEZ al arrancar el contenedor
-        await restoreSession();
+        // Borramos la carpeta auth local antes de restaurar para evitar conflictos
+        await fs.remove('./auth');
+        const restored = await restoreSession();
+        if (restored) {
+            console.log('✅ Sesión previa descargada de Supabase');
+        }
     } catch (err) {
-        console.log('ℹ️ No hay sesión previa o error al restaurar');
+        console.log('ℹ️ Iniciando sin sesión previa');
     }
     
-    // Una vez restaurado (o no), iniciamos el socket
     connectToWhatsApp();
 })();
 
-// --- RUTAS DE LA API ---
-
+// --- RUTAS API ---
 app.get('/', (req, res) => {
     res.json({
-        service: "WhatsApp Bot (Baileys Version)",
-        status: isReady ? "connected" : "connecting",
-        uptime: Math.round(process.uptime()) + "s",
-        memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB"
+        service: "WhatsApp Bot",
+        status: isReady ? "connected" : "starting",
+        memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB",
+        port: PORT
     });
 });
 
 app.get('/health', (req, res) => {
-    res.status(isReady ? 200 : 503).json({
-        status: isReady ? 'connected' : 'connecting',
-        memory: process.memoryUsage(),
-        uptime: process.uptime()
-    });
+    res.status(isReady ? 200 : 503).json({ status: isReady ? 'ok' : 'connecting' });
 });
 
 app.post('/send', async (req, res) => {
     const { number, message } = req.body;
-
-    if (!isReady || !sock) {
-        return res.status(503).json({ error: 'El servicio de WhatsApp no está listo' });
-    }
-
-    if (!number || !message) {
-        return res.status(400).json({ error: 'Número y mensaje son requeridos' });
-    }
+    if (!isReady) return res.status(503).json({ error: 'WhatsApp no está listo' });
 
     try {
-        const cleanNumber = number.replace(/\D/g, '');
-        const jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@s.whatsapp.net`;
-        
+        const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
         await sock.sendMessage(jid, { text: message });
-        console.log(`🚀 Mensaje enviado a ${jid}`);
-        res.json({ success: true, message: 'Enviado correctamente' });
+        res.json({ success: true });
     } catch (err) {
-        console.error('❌ Falló el envío del mensaje:', err);
-        res.status(500).json({ error: 'Error al enviar mensaje', details: err.message });
+        res.status(500).json({ error: err.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+    console.log(`🚀 Servidor escuchando en puerto ${PORT}`);
 });
