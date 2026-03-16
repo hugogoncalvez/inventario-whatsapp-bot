@@ -13,39 +13,28 @@ const supabase = createClient(
 
 const BUCKET_NAME = 'whatsapp-session';
 const SESSION_FILE = 'session.zip';
-const AUTH_PATH = './.wwebjs_auth';
+const AUTH_PATH = './auth'; // Baileys usa esta carpeta para las credenciales
 
 async function saveSession() {
-    console.log('📦 Comprimiendo sesión para Supabase...');
+    console.log('📦 Comprimiendo sesión de Baileys para Supabase...');
     const output = fs.createWriteStream(SESSION_FILE);
     const archive = archiver('zip');
 
     return new Promise((resolve, reject) => {
         output.on('close', async () => {
             try {
-                // Usar stream en lugar de leer todo el archivo en memoria (Buffer)
                 const fileStream = fs.createReadStream(SESSION_FILE);
                 const { error } = await supabase.storage
                     .from(BUCKET_NAME)
                     .upload(SESSION_FILE, fileStream, { 
                         upsert: true,
                         contentType: 'application/zip',
-                        duplex: 'half' // Necesario para streams en algunas versiones de node-fetch/undici
+                        duplex: 'half'
                     });
 
                 if (error) throw error;
-                console.log('✅ Sesión guardada en Supabase');
+                console.log('✅ Sesión de Baileys guardada en Supabase');
                 await fs.remove(SESSION_FILE);
-        // Limpiar archivos de bloqueo de Chrome
-        const sessionPath = path.join(AUTH_PATH, 'session');
-        const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-        for (const lock of lockFiles) {
-            const lockPath = path.join(sessionPath, lock);
-            if (await fs.pathExists(lockPath)) {
-                await fs.remove(lockPath);
-                console.log(`🧹 Borrado archivo de bloqueo: ${lock}`);
-            }
-        }
                 resolve();
             } catch (err) {
                 reject(err);
@@ -55,32 +44,26 @@ async function saveSession() {
         archive.on('error', reject);
         archive.pipe(output);
         
-        // Solo incluir archivos esenciales, ignorando la caché pesada
-        archive.glob('**/*', {
-            cwd: AUTH_PATH,
-            ignore: ['**/Cache/**', '**/Code Cache/**', '**/GPUCache/**']
-        });
-
+        // Comprimir toda la carpeta auth
+        archive.directory(AUTH_PATH, false);
         archive.finalize();
     });
 }
 
 async function restoreSession() {
-    console.log('🔄 Intentando restaurar sesión desde Supabase...');
+    console.log('🔄 Intentando restaurar sesión de Baileys desde Supabase...');
     try {
         const { data, error } = await supabase.storage
             .from(BUCKET_NAME)
             .download(SESSION_FILE);
 
         if (error) {
-            console.log('ℹ️ No hay sesión previa o error al descargar');
+            console.log('ℹ️ No hay sesión previa de Baileys');
             return false;
         }
 
         const buffer = Buffer.from(await data.arrayBuffer());
         await fs.ensureDir(AUTH_PATH);
-        
-        // Escribir temporalmente el zip para descomprimir
         await fs.writeFile(SESSION_FILE, buffer);
         
         await fs.createReadStream(SESSION_FILE)
@@ -88,20 +71,10 @@ async function restoreSession() {
             .promise();
 
         await fs.remove(SESSION_FILE);
-        // Limpiar archivos de bloqueo de Chrome
-        const sessionPath = path.join(AUTH_PATH, 'session');
-        const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-        for (const lock of lockFiles) {
-            const lockPath = path.join(sessionPath, lock);
-            if (await fs.pathExists(lockPath)) {
-                await fs.remove(lockPath);
-                console.log(`🧹 Borrado archivo de bloqueo: ${lock}`);
-            }
-        }
-        console.log('✅ Sesión restaurada con éxito');
+        console.log('✅ Sesión de Baileys restaurada con éxito');
         return true;
     } catch (err) {
-        console.error('❌ Error al restaurar sesión:', err);
+        console.error('❌ Error al restaurar sesión de Baileys:', err);
         return false;
     }
 }

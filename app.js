@@ -1,8 +1,9 @@
 require('dotenv').config();
-const { Client, LocalAuth } = require('whatsapp-web.js');
-const qrcode = require('qrcode-terminal');
 const express = require('express');
 const cors = require('cors');
+const qrcode = require('qrcode-terminal');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const { saveSession, restoreSession } = require('./sessionStore');
 
 const app = express();
@@ -10,139 +11,80 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 10000;
-console.log(`DEBUG: Iniciando en puerto ${PORT}`);
-console.log(`DEBUG: process.env.PORT actual: ${process.env.PORT}`);
-console.log(`DEBUG: Memoria total asignada a Node: 320MB`);
-
-// Captura de errores críticos para evitar cierres silenciosos
-process.on('uncaughtException', (err) => {
-    console.error('❌ CRASH (uncaughtException):', err.message);
-    if (err.message.includes('Memory')) {
-        console.error('Límite de memoria alcanzado. Reiniciando...');
-        process.exit(1);
-    }
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ CRASH (unhandledRejection):', reason);
-});
-
-// Configuración del cliente de WhatsApp
-const client = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: './.wwebjs_auth'
-    }),
-    webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-    },
-    puppeteer: {
-        headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu',
-            '--disable-extensions',
-            '--disable-site-isolation-trials',
-            '--disable-features=IsolateOrigins,site-per-process',
-            '--disable-software-rasterizer',
-            '--disable-background-networking', // Sugerido por otra AI
-            '--disable-background-timer-throttling', // Sugerido por otra AI
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            '--disable-ipc-flooding-protection',
-            '--js-flags=--max-old-space-size=128 --expose-gc'
-        ]
-    }
-});
-
+let sock;
 let isReady = false;
-let sessionRestored = false;
 
-// Eventos de WhatsApp
-client.on('qr', (qr) => {
-    console.log('--- ESCANEA EL CÓDIGO QR PARA CONECTAR ---');
-    qrcode.generate(qr, { small: true });
-    sessionRestored = false;
-});
+async function connectToWhatsApp() {
+    // 1. Intentar restaurar sesión de Supabase
+    await restoreSession();
 
-client.on('ready', () => {
-    console.log('✅ El cliente de WhatsApp está LISTO');
-    isReady = true;
-});
+    // 2. Configurar autenticación multi-archivo
+    const { state, saveCreds } = await useMultiFileAuthState('auth');
 
-client.on('authenticated', async () => {
-    console.log('✅ Autenticación exitosa');
-    console.log(`DEBUG: sessionRestored = ${sessionRestored}`);
-    
-    if (!sessionRestored) {
-        console.log('⏳ Nueva sesión detectada. Se guardará en 15 segundos...');
-        setTimeout(async () => {
-            try {
-                if (!sessionRestored) {
-                    await saveSession();
-                    console.log('💾 Nueva sesión guardada exitosamente');
-                }
-            } catch (err) {
-                console.error('❌ Error al guardar nueva sesión:', err);
+    // 3. Inicializar socket
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }), // Menos ruido en logs
+        browser: ['Alert Service', 'Chrome', '1.0.0']
+    });
+
+    // Eventos de conexión
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+            console.log('--- ESCANEA EL CÓDIGO QR PARA CONECTAR ---');
+            qrcode.generate(qr, { small: true });
+        }
+
+        if (connection === 'close') {
+            isReady = false;
+            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
+            console.warn('⚠️ Conexión cerrada. ¿Reconectando?:', shouldReconnect);
+            if (shouldReconnect) {
+                connectToWhatsApp();
             }
-        }, 15000);
-    } else {
-        console.log('ℹ️ Sesión previa detectada. Se omite el guardado para ahorrar RAM.');
-    }
-});
+        } else if (connection === 'open') {
+            console.log('✅✅✅ WhatsApp Conectado y LISTO ✅✅✅');
+            isReady = true;
+            
+            // Guardar sesión en Supabase una vez conectado con éxito
+            try {
+                await saveSession();
+            } catch (err) {
+                console.error('❌ Error guardando sesión en Supabase:', err);
+            }
+        }
+    });
 
-client.on('auth_failure', msg => {
-    console.error('❌ Error de autenticación:', msg);
-    isReady = false;
-});
+    // Guardar credenciales automáticamente cuando cambien
+    sock.ev.on('creds.update', saveCreds);
 
-client.on('disconnected', async (reason) => {
-    console.warn('⚠️ Cliente desconectado:', reason);
-    isReady = false;
-    setTimeout(() => {
-        console.log('🔄 Re-inicializando cliente...');
-        client.initialize().catch(err => console.error('Error al re-inicializar:', err));
-    }, 5000);
-});
+    // Escuchar mensajes (opcional, igual que antes para ver IDs)
+    sock.ev.on('messages.upsert', async m => {
+        const msg = m.messages[0];
+        if (!msg.key.fromMe && m.type === 'notify') {
+            const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text;
+            if (text === '!id') {
+                const remoteJid = msg.key.remoteJid;
+                console.log(`--- INFO DE CHAT ---`);
+                console.log(`ID: ${remoteJid}`);
+                console.log(`--------------------`);
+            }
+        }
+    });
+}
 
-// Evento para ver el ID de los chats
-client.on('message_create', async (msg) => {
-    if (msg.from === 'status@broadcast') return;
-    if (msg.body === '!id') {
-        const chat = await msg.getChat();
-        console.log(`--- INFO DE CHAT ---`);
-        console.log(`Nombre: ${chat.name}`);
-        console.log(`ID: ${chat.id._serialized}`);
-        console.log(`--------------------`);
-    }
-});
-
-// Inicializar cliente
-(async () => {
-    try {
-        console.log('DEBUG: Cargando sesión desde Supabase...');
-        sessionRestored = await restoreSession();
-    } catch (err) {
-        console.log('ℹ️ No se pudo restaurar la sesión (primera vez)');
-    }
-    console.log('DEBUG: Inicializando Puppeteer/WhatsApp...');
-    client.initialize().catch(err => console.error('❌ Error inicializando cliente:', err));
-})();
+// Iniciar conexión
+connectToWhatsApp();
 
 // --- RUTAS DE LA API ---
 
 app.get('/', (req, res) => {
     res.json({
-        service: "WhatsApp Bot",
-        status: isReady ? "connected" : "starting",
-        sessionRestored: sessionRestored,
+        service: "WhatsApp Bot (Baileys Version)",
+        status: isReady ? "connected" : "connecting",
         uptime: Math.round(process.uptime()) + "s",
         memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB"
     });
@@ -152,15 +94,14 @@ app.get('/health', (req, res) => {
     res.status(isReady ? 200 : 503).json({
         status: isReady ? 'connected' : 'connecting',
         memory: process.memoryUsage(),
-        uptime: process.uptime(),
-        timestamp: new Date()
+        uptime: process.uptime()
     });
 });
 
 app.post('/send', async (req, res) => {
     const { number, message } = req.body;
 
-    if (!isReady) {
+    if (!isReady || !sock) {
         return res.status(503).json({ error: 'El servicio de WhatsApp no está listo' });
     }
 
@@ -169,9 +110,12 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        const formattedNumber = number.includes('@') ? number : `${number.replace(/\D/g, '')}@c.us`;
-        await client.sendMessage(formattedNumber, message);
-        console.log(`🚀 Mensaje enviado a ${formattedNumber}`);
+        // Formatear número para Baileys (ej: 5493764000000@s.whatsapp.net)
+        const cleanNumber = number.replace(/\D/g, '');
+        const jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@s.whatsapp.net`;
+        
+        await sock.sendMessage(jid, { text: message });
+        console.log(`🚀 Mensaje enviado a ${jid}`);
         res.json({ success: true, message: 'Enviado correctamente' });
     } catch (err) {
         console.error('❌ Falló el envío del mensaje:', err);
@@ -180,5 +124,5 @@ app.post('/send', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`🚀 Servidor de Alertas WhatsApp corriendo en puerto ${PORT}`);
+    console.log(`🚀 Servidor de Alertas WhatsApp (Socket) corriendo en puerto ${PORT}`);
 });
