@@ -23,10 +23,15 @@ async function saveSession() {
     return new Promise((resolve, reject) => {
         output.on('close', async () => {
             try {
-                const fileBuffer = await fs.readFile(SESSION_FILE);
+                // Usar stream en lugar de leer todo el archivo en memoria (Buffer)
+                const fileStream = fs.createReadStream(SESSION_FILE);
                 const { error } = await supabase.storage
                     .from(BUCKET_NAME)
-                    .upload(SESSION_FILE, fileBuffer, { upsert: true });
+                    .upload(SESSION_FILE, fileStream, { 
+                        upsert: true,
+                        contentType: 'application/zip',
+                        duplex: 'half' // Necesario para streams en algunas versiones de node-fetch/undici
+                    });
 
                 if (error) throw error;
                 console.log('✅ Sesión guardada en Supabase');

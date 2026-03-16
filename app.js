@@ -10,6 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 8001;
+console.log(`DEBUG: Iniciando en puerto ${PORT}`);
 
 // Configuración del cliente de WhatsApp
 const client = new Client({
@@ -18,7 +19,8 @@ const client = new Client({
     }),
     puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/opt/render/project/src/.cache/puppeteer/chrome/linux-146.0.7680.76/chrome-linux64/chrome',
+        // En Render el ejecutable suele estar en /usr/bin/google-chrome-stable o se puede omitir si se usa el buildpack
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -26,12 +28,9 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process',
+            '--single-process', // Ayuda mucho con la RAM en Render
             '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--js-flags="--max-old-space-size=256"'
+            '--js-flags="--max-old-space-size=256"' // Limita el motor JS de Chromium
         ]
     }
 });
@@ -43,25 +42,35 @@ let sessionRestored = false;
 client.on('qr', (qr) => {
     console.log('--- ESCANEA EL CÓDIGO QR PARA CONECTAR ---');
     qrcode.generate(qr, { small: true });
+    sessionRestored = false; // Si hay QR, es que no hay sesión válida o falló
 });
 
 client.on('ready', () => {
-    console.log('✅ El cliente de WhatsApp está LISTO para enviar mensajes');
+    console.log('✅ El cliente de WhatsApp está LISTO');
     isReady = true;
 });
 
 client.on('authenticated', async () => {
     console.log('✅ Autenticación exitosa');
-    // Guardar sesión tras autenticación (esperamos a que se generen los archivos)
-    setTimeout(async () => {
-        if (sessionRestored) return; // No guardar si ya la restauramos de la nube
-        if (isReady) return; // No guardar si ya estamos listos y estables
-        try {
-            await saveSession();
-        } catch (err) {
-            console.error('❌ Error al guardar sesión inicial:', err);
-        }
-    }, 10000);
+    console.log(`DEBUG: sessionRestored = ${sessionRestored}`);
+    
+    // Solo intentamos guardar si NO ha sido restaurada (es decir, es una sesión nueva por QR)
+    if (!sessionRestored) {
+        console.log('⏳ Nueva sesión detectada. Se guardará en 15 segundos...');
+        setTimeout(async () => {
+            try {
+                // Verificamos de nuevo antes de guardar por si acaso
+                if (!sessionRestored) {
+                    await saveSession();
+                    console.log('💾 Nueva sesión guardada exitosamente');
+                }
+            } catch (err) {
+                console.error('❌ Error al guardar nueva sesión:', err);
+            }
+        }, 15000);
+    } else {
+        console.log('ℹ️ Sesión previa detectada. Se omite el guardado para ahorrar RAM.');
+    }
 });
 
 client.on('auth_failure', msg => {

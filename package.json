@@ -4,7 +4,7 @@
   "description": "Servicio de alertas de WhatsApp para Sistema de Inventario",
   "main": "app.js",
   "scripts": {
-    "start": "node --max-old-space-size=450 app.js",
+    "start": "node --max-old-space-size=384 app.js",
     "dev": "nodemon app.js"
   },
   "dependencies": {
