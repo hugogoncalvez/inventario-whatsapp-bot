@@ -46,11 +46,13 @@ const client = new Client({
             '--no-zygote',
             '--single-process', // Crucial para Render
             '--disable-gpu',
-            '--disable-extensions', // Ahorra RAM
+            '--disable-extensions',
             '--disable-site-isolation-trials', // Ahorra RAM
-            '--no-experiments', // Ahorra RAM
+            '--disable-features=IsolateOrigins,site-per-process', // Ahorra RAM
+            '--disable-software-rasterizer', // Evita consumo CPU/RAM extra
+            '--no-experiments',
             '--ignore-gpu-blacklist',
-            '--js-flags=--max-old-space-size=128' // Limita el motor JS de Chromium
+            '--js-flags=--max-old-space-size=128'
         ]
     }
 });
@@ -120,11 +122,13 @@ client.on('message_create', async (msg) => {
 // Inicializar cliente
 (async () => {
     try {
+        console.log('DEBUG: Cargando sesión desde Supabase...');
         sessionRestored = await restoreSession();
     } catch (err) {
         console.log('ℹ️ No se pudo restaurar la sesión (primera vez)');
     }
-    client.initialize();
+    console.log('DEBUG: Inicializando Puppeteer/WhatsApp...');
+    client.initialize().catch(err => console.error('❌ Error inicializando cliente:', err));
 })();
 
 // --- RUTAS DE LA API ---
