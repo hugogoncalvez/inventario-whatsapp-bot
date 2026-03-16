@@ -29,9 +29,13 @@ const client = new Client({
     authStrategy: new LocalAuth({
         dataPath: './.wwebjs_auth'
     }),
+    // TRUCO MAESTRO: Usar versión web remota para ahorrar ~200MB de RAM
+    webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+    },
     puppeteer: {
         headless: true,
-        // En Render el ejecutable suele estar en /usr/bin/google-chrome-stable o se puede omitir si se usa el buildpack
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
             '--no-sandbox',
@@ -43,7 +47,10 @@ const client = new Client({
             '--single-process', // Crucial para Render
             '--disable-gpu',
             '--disable-extensions', // Ahorra RAM
-            '--js-flags=--max-old-space-size=128' // Sin comillas internas
+            '--disable-site-isolation-trials', // Ahorra RAM
+            '--no-experiments', // Ahorra RAM
+            '--ignore-gpu-blacklist',
+            '--js-flags=--max-old-space-size=128' // Limita el motor JS de Chromium
         ]
     }
 });
@@ -55,7 +62,7 @@ let sessionRestored = false;
 client.on('qr', (qr) => {
     console.log('--- ESCANEA EL CÓDIGO QR PARA CONECTAR ---');
     qrcode.generate(qr, { small: true });
-    sessionRestored = false; // Si hay QR, es que no hay sesión válida o falló
+    sessionRestored = false;
 });
 
 client.on('ready', () => {
@@ -67,12 +74,10 @@ client.on('authenticated', async () => {
     console.log('✅ Autenticación exitosa');
     console.log(`DEBUG: sessionRestored = ${sessionRestored}`);
     
-    // Solo intentamos guardar si NO ha sido restaurada (es decir, es una sesión nueva por QR)
     if (!sessionRestored) {
         console.log('⏳ Nueva sesión detectada. Se guardará en 15 segundos...');
         setTimeout(async () => {
             try {
-                // Verificamos de nuevo antes de guardar por si acaso
                 if (!sessionRestored) {
                     await saveSession();
                     console.log('💾 Nueva sesión guardada exitosamente');
@@ -94,18 +99,15 @@ client.on('auth_failure', msg => {
 client.on('disconnected', async (reason) => {
     console.warn('⚠️ Cliente desconectado:', reason);
     isReady = false;
-    // Intentar reconectar con un pequeño delay para evitar loops de crash
     setTimeout(() => {
         console.log('🔄 Re-inicializando cliente...');
         client.initialize().catch(err => console.error('Error al re-inicializar:', err));
     }, 5000);
 });
 
-// Evento para ver el ID de los chats (útil para configurar el .env)
+// Evento para ver el ID de los chats
 client.on('message_create', async (msg) => {
     if (msg.from === 'status@broadcast') return;
-    
-    // Solo mostramos logs si es un comando especial o si queremos depurar
     if (msg.body === '!id') {
         const chat = await msg.getChat();
         console.log(`--- INFO DE CHAT ---`);
@@ -115,7 +117,7 @@ client.on('message_create', async (msg) => {
     }
 });
 
-// Inicializar cliente (restaurando sesión de Supabase si existe)
+// Inicializar cliente
 (async () => {
     try {
         sessionRestored = await restoreSession();
@@ -128,7 +130,13 @@ client.on('message_create', async (msg) => {
 // --- RUTAS DE LA API ---
 
 app.get('/', (req, res) => {
-    res.send('WhatsApp Bot is running OK');
+    res.json({
+        service: "WhatsApp Bot",
+        status: isReady ? "connected" : "starting",
+        sessionRestored: sessionRestored,
+        uptime: Math.round(process.uptime()) + "s",
+        memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB"
+    });
 });
 
 app.get('/health', (req, res) => {
