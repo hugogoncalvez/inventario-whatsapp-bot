@@ -1,3 +1,17 @@
+# Dependencias
 node_modules/
+
+# Autenticación y Sesión (¡CRÍTICO! No subir a GitHub)
+.wwebjs_auth/
 .wwebjs_cache/
+session.zip
+
+# Variables de entorno
 .env
+
+# Archivos de sistema y basura de Windows/Mac
+.DS_Store
+*.lnk
+*.bat
+*.exe
+

@@ -3,6 +3,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const express = require('express');
 const cors = require('cors');
+const { saveSession, restoreSession } = require('./sessionStore');
 
 const app = express();
 app.use(cors());
@@ -43,8 +44,16 @@ client.on('ready', () => {
     isReady = true;
 });
 
-client.on('authenticated', () => {
+client.on('authenticated', async () => {
     console.log('✅ Autenticación exitosa');
+    // Guardar sesión tras autenticación (esperamos a que se generen los archivos)
+    setTimeout(async () => {
+        try {
+            await saveSession();
+        } catch (err) {
+            console.error('❌ Error al guardar sesión inicial:', err);
+        }
+    }, 10000);
 });
 
 client.on('auth_failure', msg => {
@@ -52,32 +61,39 @@ client.on('auth_failure', msg => {
     isReady = false;
 });
 
-client.on('disconnected', (reason) => {
+client.on('disconnected', async (reason) => {
     console.warn('⚠️ Cliente desconectado:', reason);
     isReady = false;
-    client.initialize(); // Intentar reconectar
+    // Intentar reconectar si no fue una desconexión voluntaria
+    client.initialize().catch(err => console.error('Error al re-inicializar:', err));
 });
 
+// Evento para ver el ID de los chats (útil para configurar el .env)
 client.on('message_create', async (msg) => {
     if (msg.from === 'status@broadcast') return;
+    
+    // Solo mostramos logs si es un comando especial o si queremos depurar
+    if (msg.body === '!id') {
+        const chat = await msg.getChat();
+        console.log(`--- INFO DE CHAT ---`);
+        console.log(`Nombre: ${chat.name}`);
+        console.log(`ID: ${chat.id._serialized}`);
+        console.log(`--------------------`);
+    }
+});
 
-    // Obtener información del chat
-    const chat = await msg.getChat();
-
-    console.log('--- DETECCIÓN DE CHAT ---');
-    console.log('¿Es Grupo?:', chat.isGroup ? 'SÍ ✅' : 'NO ❌');
-    console.log('Nombre del Chat:', chat.name);
-    console.log('ID DEL CHAT:', chat.id._serialized); // ESTE ES EL QUE BUSCAMOS
-    console.log('Contenido:', msg.body);
-    console.log('-------------------------');
-})
-
-// Inicializar cliente
-client.initialize();
+// Inicializar cliente (restaurando sesión de Supabase si existe)
+(async () => {
+    try {
+        await restoreSession();
+    } catch (err) {
+        console.log('ℹ️ No se pudo restaurar la sesión (primera vez)');
+    }
+    client.initialize();
+})();
 
 // --- RUTAS DE LA API ---
 
-// Endpoint de salud (para Render)
 app.get('/health', (req, res) => {
     res.status(isReady ? 200 : 503).json({
         status: isReady ? 'connected' : 'connecting',
@@ -85,7 +101,6 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Endpoint para enviar mensajes desde el Inventario
 app.post('/send', async (req, res) => {
     const { number, message } = req.body;
 
@@ -98,12 +113,9 @@ app.post('/send', async (req, res) => {
     }
 
     try {
-        // Limpiar el número (quitar +, espacios, etc)
         const formattedNumber = number.includes('@') ? number : `${number.replace(/\D/g, '')}@c.us`;
-
         await client.sendMessage(formattedNumber, message);
         console.log(`🚀 Mensaje enviado a ${formattedNumber}`);
-
         res.json({ success: true, message: 'Enviado correctamente' });
     } catch (err) {
         console.error('❌ Falló el envío del mensaje:', err);
@@ -111,7 +123,6 @@ app.post('/send', async (req, res) => {
     }
 });
 
-// Servidor Express
 app.listen(PORT, () => {
     console.log(`🚀 Servidor de Alertas WhatsApp corriendo en puerto ${PORT}`);
 });
