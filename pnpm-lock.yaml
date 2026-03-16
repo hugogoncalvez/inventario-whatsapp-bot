@@ -26,6 +26,9 @@ importers:
       fs-extra:
         specifier: ^11.3.4
         version: 11.3.4
+      puppeteer:
+        specifier: ^24.39.1
+        version: 24.39.1
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
