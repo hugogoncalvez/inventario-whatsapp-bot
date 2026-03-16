@@ -12,12 +12,15 @@ app.use(express.json());
 const PORT = process.env.PORT || 10000;
 console.log(`DEBUG: Iniciando en puerto ${PORT}`);
 console.log(`DEBUG: process.env.PORT actual: ${process.env.PORT}`);
-console.log(`DEBUG: Memoria total asignada a Node: 256MB`);
+console.log(`DEBUG: Memoria total asignada a Node: 320MB`);
 
 // Captura de errores críticos para evitar cierres silenciosos
 process.on('uncaughtException', (err) => {
     console.error('❌ CRASH (uncaughtException):', err.message);
-    console.error(err.stack);
+    if (err.message.includes('Memory')) {
+        console.error('Límite de memoria alcanzado. Reiniciando...');
+        process.exit(1);
+    }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -29,7 +32,6 @@ const client = new Client({
     authStrategy: new LocalAuth({
         dataPath: './.wwebjs_auth'
     }),
-    // TRUCO MAESTRO: Usar versión web remota para ahorrar ~200MB de RAM
     webVersionCache: {
         type: 'remote',
         remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
@@ -44,15 +46,18 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Crucial para Render
+            '--single-process',
             '--disable-gpu',
             '--disable-extensions',
-            '--disable-site-isolation-trials', // Ahorra RAM
-            '--disable-features=IsolateOrigins,site-per-process', // Ahorra RAM
-            '--disable-software-rasterizer', // Evita consumo CPU/RAM extra
-            '--no-experiments',
-            '--ignore-gpu-blacklist',
-            '--js-flags=--max-old-space-size=128'
+            '--disable-site-isolation-trials',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--disable-software-rasterizer',
+            '--disable-background-networking', // Sugerido por otra AI
+            '--disable-background-timer-throttling', // Sugerido por otra AI
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-ipc-flooding-protection',
+            '--js-flags=--max-old-space-size=128 --expose-gc'
         ]
     }
 });
