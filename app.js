@@ -9,8 +9,20 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT || 8001;
+const PORT = process.env.PORT || 10000;
 console.log(`DEBUG: Iniciando en puerto ${PORT}`);
+console.log(`DEBUG: process.env.PORT actual: ${process.env.PORT}`);
+console.log(`DEBUG: Memoria total asignada a Node: 256MB`);
+
+// Captura de errores críticos para evitar cierres silenciosos
+process.on('uncaughtException', (err) => {
+    console.error('❌ CRASH (uncaughtException):', err.message);
+    console.error(err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ CRASH (unhandledRejection):', reason);
+});
 
 // Configuración del cliente de WhatsApp
 const client = new Client({
@@ -28,9 +40,10 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--single-process', // Ayuda mucho con la RAM en Render
+            '--single-process', // Crucial para Render
             '--disable-gpu',
-            '--js-flags="--max-old-space-size=256"' // Limita el motor JS de Chromium
+            '--disable-extensions', // Ahorra RAM
+            '--js-flags=--max-old-space-size=128' // Sin comillas internas
         ]
     }
 });
@@ -81,8 +94,11 @@ client.on('auth_failure', msg => {
 client.on('disconnected', async (reason) => {
     console.warn('⚠️ Cliente desconectado:', reason);
     isReady = false;
-    // Intentar reconectar si no fue una desconexión voluntaria
-    client.initialize().catch(err => console.error('Error al re-inicializar:', err));
+    // Intentar reconectar con un pequeño delay para evitar loops de crash
+    setTimeout(() => {
+        console.log('🔄 Re-inicializando cliente...');
+        client.initialize().catch(err => console.error('Error al re-inicializar:', err));
+    }, 5000);
 });
 
 // Evento para ver el ID de los chats (útil para configurar el .env)
@@ -111,9 +127,15 @@ client.on('message_create', async (msg) => {
 
 // --- RUTAS DE LA API ---
 
+app.get('/', (req, res) => {
+    res.send('WhatsApp Bot is running OK');
+});
+
 app.get('/health', (req, res) => {
     res.status(isReady ? 200 : 503).json({
         status: isReady ? 'connected' : 'connecting',
+        memory: process.memoryUsage(),
+        uptime: process.uptime(),
         timestamp: new Date()
     });
 });
