@@ -11,21 +11,24 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Puerto estándar de Render
 const PORT = process.env.PORT || 10000;
-const PID = process.pid; // ID del proceso para detectar duplicados
+const PID = process.pid;
 
 let sock;
 let isReady = false;
 let isConnecting = false;
 
-console.log(`[PID:${PID}] 🚀 Iniciando instancia del servicio...`);
+console.log(`[PID:${PID}] 🚀 Iniciando instancia...`);
 
 async function connectToWhatsApp() {
     if (isConnecting) return;
     isConnecting = true;
 
-    console.log(`[PID:${PID}] 🔄 Intentando conectar a WhatsApp Sockets...`);
+    // Damos 5 segundos de cortesía para que procesos viejos se cierren
+    console.log(`[PID:${PID}] ⏳ Esperando estabilidad antes de conectar...`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
+
+    console.log(`[PID:${PID}] 🔄 Conectando a WhatsApp Sockets...`);
     
     try {
         const { state, saveCreds } = await useMultiFileAuthState('auth');
@@ -45,7 +48,7 @@ async function connectToWhatsApp() {
             const { connection, lastDisconnect, qr } = update;
 
             if (qr) {
-                console.log(`[PID:${PID}] ⚠️ QR GENERADO. Escanea para conectar.`);
+                console.log(`[PID:${PID}] ⚠️ QR GENERADO:`);
                 qrcode.generate(qr, { small: true });
             }
 
@@ -53,22 +56,17 @@ async function connectToWhatsApp() {
                 isReady = false;
                 isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
+                console.warn(`[PID:${PID}] ⚠️ Conexión cerrada (${statusCode})`);
                 
-                console.warn(`[PID:${PID}] ⚠️ Conexión cerrada (Status: ${statusCode})`);
-
-                if (statusCode === DisconnectReason.loggedOut) {
-                    console.error('❌ Sesión cerrada permanentemente. Borrando auth...');
-                    await fs.remove('./auth');
+                // Si no es un logout manual, reintentamos
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    setTimeout(connectToWhatsApp, 5000);
                 }
-                
-                // Reintento automático
-                setTimeout(connectToWhatsApp, 5000);
             } else if (connection === 'open') {
-                console.log(`[PID:${PID}] ✅✅✅ WHATSAPP CONECTADO Y LISTO ✅✅✅`);
+                console.log(`[PID:${PID}] ✅✅✅ WHATSAPP CONECTADO ✅✅✅`);
                 isReady = true;
                 isConnecting = false;
-                
-                saveSession().catch(err => console.error('❌ Error Supabase:', err));
+                saveSession().catch(e => console.error("Error Supabase:", e));
             }
         });
 
@@ -76,31 +74,27 @@ async function connectToWhatsApp() {
 
     } catch (err) {
         isConnecting = false;
-        console.error(`[PID:${PID}] ❌ Error en el socket:`, err);
+        console.error(`[PID:${PID}] ❌ Error:`, err);
         setTimeout(connectToWhatsApp, 10000);
     }
 }
 
-// Inicialización
-(async () => {
-    try {
-        await fs.ensureDir('./auth');
-        const restored = await restoreSession();
-        if (restored) console.log(`[PID:${PID}] ✅ Sesión restaurada de la nube`);
-        
-        connectToWhatsApp();
-    } catch (err) {
-        console.error('Error en arranque:', err);
-        connectToWhatsApp();
-    }
-})();
+// Rutas
+app.get('/', (req, res) => {
+    res.json({
+        service: "WhatsApp Bot",
+        status: isReady ? "connected" : "starting/connecting",
+        pid: PID,
+        memory: Math.round(process.memoryUsage().rss / 1024 / 1024) + "MB"
+    });
+});
 
 app.get('/health', (req, res) => {
     res.status(isReady ? 200 : 503).json({ status: isReady ? 'ok' : 'connecting', pid: PID });
 });
 
 app.post('/send', async (req, res) => {
-    if (!isReady) return res.status(503).json({ error: 'WhatsApp no listo' });
+    if (!isReady) return res.status(503).json({ error: 'Not ready' });
     const { number, message } = req.body;
     try {
         const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
@@ -112,5 +106,13 @@ app.post('/send', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`[PID:${PID}] 🚀 Servidor web en puerto ${PORT}`);
+    console.log(`[PID:${PID}] 🚀 Servidor en puerto ${PORT}`);
+    // Arrancamos WhatsApp después de que el servidor web esté listo
+    (async () => {
+        try {
+            await fs.ensureDir('./auth');
+            await restoreSession();
+        } catch (e) {}
+        connectToWhatsApp();
+    })();
 });
