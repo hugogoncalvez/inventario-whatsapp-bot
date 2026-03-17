@@ -17,21 +17,21 @@ const PID = process.pid;
 let sock;
 let isReady = false;
 let isConnecting = false;
-let isShuttingDown = false; // Nueva bandera para evitar reconexiones de procesos viejos
+let isShuttingDown = false;
 
 console.log(`[PID:${PID}] 🚀 Iniciando instancia...`);
 
-// --- MANEJO DE APAGADO LIMPIO ---
+// --- APAGADO LIMPIO (SIN DESLOGUEAR) ---
 const shutdown = async (signal) => {
-    console.log(`[PID:${PID}] 🛑 Recibida señal ${signal}. Cerrando bot...`);
+    if (isShuttingDown) return;
+    console.log(`[PID:${PID}] 🛑 Señal ${signal}: Cerrando conexión...`);
     isShuttingDown = true;
     isReady = false;
     if (sock) {
         sock.ev.removeAllListeners('connection.update');
-        sock.logout().catch(() => {});
-        sock.end();
+        sock.end(); // IMPORTANTE: end() mantiene la sesión, logout() la borra.
     }
-    process.exit(0);
+    setTimeout(() => process.exit(0), 1000);
 };
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -41,13 +41,11 @@ async function connectToWhatsApp() {
     if (isConnecting || isShuttingDown) return;
     isConnecting = true;
 
-    // Damos 10 segundos para asegurar que la instancia anterior murió del todo
-    console.log(`[PID:${PID}] ⏳ Esperando 10s para estabilización de Render...`);
+    console.log(`[PID:${PID}] ⏳ Esperando 10s para estabilización...`);
     await new Promise(resolve => setTimeout(resolve, 10000));
 
     if (isShuttingDown) return;
-
-    console.log(`[PID:${PID}] 🔄 Conectando a WhatsApp Sockets...`);
+    console.log(`[PID:${PID}] 🔄 Conectando a WhatsApp...`);
     
     try {
         const { state, saveCreds } = await useMultiFileAuthState('auth');
@@ -61,6 +59,7 @@ async function connectToWhatsApp() {
             browser: ['Alert Service', 'Chrome', '1.0.0'],
             connectTimeoutMs: 60000,
             keepAliveIntervalMs: 30000,
+            shouldIgnoreJid: (jid) => jid.includes('broadcast'), // Evitar procesar estados/newsletters para ahorrar RAM
         });
 
         sock.ev.on('connection.update', async (update) => {
@@ -75,19 +74,25 @@ async function connectToWhatsApp() {
                 isReady = false;
                 isConnecting = false;
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                
                 console.warn(`[PID:${PID}] ⚠️ Conexión cerrada (${statusCode})`);
 
-                // SOLO reintentamos si NO nos estamos apagando y NO es un logout manual
-                if (!isShuttingDown && statusCode !== DisconnectReason.loggedOut) {
-                    console.log(`[PID:${PID}] 🔄 Reintentando en 5s...`);
+                if (isShuttingDown) return;
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    console.error('❌ Sesión desvinculada. Borrando auth...');
+                    await fs.remove('./auth');
+                    setTimeout(connectToWhatsApp, 5000);
+                } else if (statusCode === 440) {
+                    console.warn('⚠️ Conflicto de sesión (440). Esperando 20s para reintentar...');
+                    setTimeout(connectToWhatsApp, 20000);
+                } else {
                     setTimeout(connectToWhatsApp, 5000);
                 }
             } else if (connection === 'open') {
                 console.log(`[PID:${PID}] ✅✅✅ WHATSAPP CONECTADO ✅✅✅`);
                 isReady = true;
                 isConnecting = false;
-                saveSession().catch(e => {});
+                saveSession().catch(() => {});
             }
         });
 
@@ -116,7 +121,7 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/send', async (req, res) => {
-    if (!isReady || isShuttingDown) return res.status(503).json({ error: 'Bot not ready' });
+    if (!isReady || isShuttingDown) return res.status(503).json({ error: 'Bot no listo' });
     const { number, message } = req.body;
     try {
         const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
