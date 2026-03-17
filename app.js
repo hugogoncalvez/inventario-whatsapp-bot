@@ -123,11 +123,22 @@ app.get('/health', (req, res) => {
 app.post('/send', async (req, res) => {
     if (!isReady || isShuttingDown) return res.status(503).json({ error: 'Bot no listo' });
     const { number, message } = req.body;
+    
     try {
-        const jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
+        let jid;
+        // Si ya incluye el dominio (ej: @g.us o @s.whatsapp.net), lo usamos tal cual
+        if (number.includes('@')) {
+            jid = number.trim();
+        } else {
+            // Si es solo un número, lo limpiamos y añadimos el dominio de usuario
+            jid = `${number.replace(/\D/g, '')}@s.whatsapp.net`;
+        }
+
+        console.log(`[PID:${PID}] 📤 Enviando mensaje a: ${jid}`);
         await sock.sendMessage(jid, { text: message });
-        res.json({ success: true });
+        res.json({ success: true, to: jid });
     } catch (err) {
+        console.error(`[PID:${PID}] ❌ Error al enviar:`, err);
         res.status(500).json({ error: err.message });
     }
 });
